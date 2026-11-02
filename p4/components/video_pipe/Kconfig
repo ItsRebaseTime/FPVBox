@@ -1,0 +1,46 @@
+menu "FPVBox video pipeline"
+
+choice FPV_STD
+    prompt "Video standard"
+    default FPV_STD_AUTO
+    config FPV_STD_AUTO
+        bool "Automatic (NTSC / PAL from the line count)"
+    config FPV_STD_NTSC
+        bool "NTSC only"
+    config FPV_STD_PAL
+        bool "PAL only"
+endchoice
+
+config FPV_DECODE_WORKERS
+    int "Line decoder tasks (spread over both cores)"
+    range 1 4
+    default 2
+
+config FPV_TOP_FIELD
+    int "Field parity that holds the top line (weave / line interpolation)"
+    range 1 2
+    default 1
+
+config FPV_JPEG_QUALITY
+    int "MJPEG quality"
+    range 30 100
+    default 85
+
+config FPV_JPEG_INPUT_YVYU
+    bool "JPEG encoder takes YVYU (swap U/V before encoding)"
+    default y
+    help
+        The P4 JPEG encoder's YUV422 input is declared as YVYU. Disable if the
+        MJPEG stream shows red and blue swapped.
+
+config FPV_H264_GOP
+    int "H.264 GOP (frames between IDR frames)"
+    range 1 120
+    default 30
+
+config FPV_H264_KBPS
+    int "H.264 target bitrate (kbit/s)"
+    range 500 20000
+    default 6000
+
+endmenu

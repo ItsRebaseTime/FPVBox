@@ -1,0 +1,49 @@
+diff --git a/src/lib/RFAMP/RFAMP_hal.cpp b/src/lib/RFAMP/RFAMP_hal.cpp
+index b7b5c86..dd2c302 100644
+--- a/src/lib/RFAMP/RFAMP_hal.cpp
++++ b/src/lib/RFAMP/RFAMP_hal.cpp
+@@ -109,7 +109,7 @@ void ICACHE_RAM_ATTR RFAMP_hal::TXenable(SX12XX_Radio_Number_t radioNumber)
+         GPIO.out_w1ts.out_w1ts = tx1_enable_set_bits;
+         GPIO.out_w1tc.out_w1tc = tx1_enable_clr_bits;
+     }
+-#elif defined(PLATFORM_ESP32)
++#elif defined(PLATFORM_ESP32) && !defined(PLATFORM_ESP32_P4)
+     if (radioNumber == SX12XX_Radio_All)
+     {
+         GPIO.out_w1ts = (uint32_t)tx_all_enable_set_bits;
+@@ -166,7 +166,7 @@ void ICACHE_RAM_ATTR RFAMP_hal::RXenable()
+ #if defined(PLATFORM_ESP32_C3)
+     GPIO.out_w1ts.out_w1ts = rx_enable_set_bits;
+     GPIO.out_w1tc.out_w1tc = rx_enable_clr_bits;
+-#elif defined(PLATFORM_ESP32)
++#elif defined(PLATFORM_ESP32) && !defined(PLATFORM_ESP32_P4)
+     GPIO.out_w1ts = rx_enable_set_bits;
+     GPIO.out_w1tc = rx_enable_clr_bits;
+ 
+@@ -197,7 +197,7 @@ void ICACHE_RAM_ATTR RFAMP_hal::TXRXdisable()
+ {
+ #if defined(PLATFORM_ESP32_C3)
+     GPIO.out_w1tc.out_w1tc = txrx_disable_clr_bits;
+-#elif defined(PLATFORM_ESP32)
++#elif defined(PLATFORM_ESP32) && !defined(PLATFORM_ESP32_P4)
+     GPIO.out_w1tc = txrx_disable_clr_bits;
+     GPIO.out1_w1tc.data = txrx_disable_clr_bits >> 32;
+ #else
+diff --git a/src/lib/RFAMP/RFAMP_hal.h b/src/lib/RFAMP/RFAMP_hal.h
+index 1383345..8c64898 100644
+--- a/src/lib/RFAMP/RFAMP_hal.h
++++ b/src/lib/RFAMP/RFAMP_hal.h
+@@ -26,8 +26,9 @@ private:
+     uint64_t tx_all_enable_clr_bits;
+     uint64_t rx_enable_set_bits;
+     uint64_t rx_enable_clr_bits;
+-#else
+-    bool rx_enabled;
+-    bool tx_enabled;
++#endif
++#if !defined(PLATFORM_ESP32) || defined(PLATFORM_ESP32_P4)
++    bool rx_enabled = false;
++    bool tx_enabled = false;
+ #endif
+ };
+\ No newline at end of file

@@ -1,0 +1,360 @@
+diff --git a/main/CMakeLists.txt b/main/CMakeLists.txt
+index 439350c..5cc6f69 100644
+--- a/main/CMakeLists.txt
++++ b/main/CMakeLists.txt
+@@ -3,10 +3,10 @@ idf_component_register(
+         "main.c" "rf.c" "phy.c" "arc_phy.c" "transport.c" "gain.c" "agc.c" "receiver.c"
+         "control.c" "calibration.c" "calibration_sphase.c" "calibration_filter.c" "calibration_dc.c"
+         "calibration_bench.c" "menu.c" "menu_ui.c" "menu_raster.c" "analog_video_detect.c"
+-        "experimental.c" "experimental_phy.c" "settings.c" "console.c" "profile.c" "diag.c" "flightlog.c" "sense_lab.c"
++        "experimental.c" "experimental_phy.c" "settings.c" "console.c" "profile.c" "diag.c" "flightlog.c" "sense_lab.c" "board.c"
+     INCLUDE_DIRS "."
+     REQUIRES esp_wifi esp_phy nvs_flash esp_event esp_netif esp_driver_parlio
+-             esp_driver_gpio esp_driver_bitscrambler esp_driver_usb_serial_jtag
++             esp_driver_gpio esp_driver_bitscrambler esp_driver_usb_serial_jtag esp_driver_uart
+              esp_driver_tsens esp_timer esp_mm hal heap esp_hw_support esp_app_format esp_partition)
+ 
+ target_bitscrambler_add_src("p64.bsasm")
+diff --git a/main/Kconfig.projbuild b/main/Kconfig.projbuild
+new file mode 100644
+index 0000000..d7d7349
+--- /dev/null
++++ b/main/Kconfig.projbuild
+@@ -0,0 +1,21 @@
++menu "C5VRX board"
++
++choice C5VRX_BOARD
++    prompt "Target board"
++    default C5VRX_BOARD_XIAO
++    help
++        Selects the pin map, console transport and video output mode.
++
++    config C5VRX_BOARD_XIAO
++        bool "Seeed XIAO ESP32-C5 + resistor DAC (upstream default)"
++
++    config C5VRX_BOARD_OSPTEK_P4C5
++        bool "OSPTEK ESP32-P4C5 module: digital video bus to the ESP32-P4"
++        help
++            The on-module SDIO/IO lines to the ESP32-P4 carry the six-bit
++            composite samples and the 40 MHz PARLIO TX clock instead of a
++            resistor DAC. The console moves from USB-Serial-JTAG (its pads,
++            GPIO13/14, are video lines here) to a UART.
++endchoice
++
++endmenu
+diff --git a/main/board.c b/main/board.c
+new file mode 100644
+index 0000000..bbc9a30
+--- /dev/null
++++ b/main/board.c
+@@ -0,0 +1,40 @@
++/* C5VRX-5 board profiles: console transport (see board.h). */
++#include "board.h"
++#include <stdio.h>
++#include "esp_err.h"
++#if BOARD_USB_CONSOLE
++#include "driver/usb_serial_jtag_vfs.h"
++#include "hal/usb_serial_jtag_ll.h"
++#else
++#include "driver/uart.h"
++#include "driver/uart_vfs.h"
++#endif
++
++#if BOARD_USB_CONSOLE
++void board_console_init(void) { usb_serial_jtag_vfs_use_nonblocking(); }
++bool board_console_read(uint8_t *c) { return usb_serial_jtag_ll_read_rxfifo(c, 1) != 0; }
++#else
++/* The UART always drains (the ESP32-P4 listens), so output is never lost,
++ * but a FIFO-polling write would busy-wait ~5 us per byte at 2 Mbaud inside
++ * receiver tasks. A small driver TX ring keeps prints asynchronous; if the
++ * heap cannot hold it, fall back to the polled path. */
++#define CONSOLE_TX_RING 1024
++#define CONSOLE_RX_RING 256
++static bool s_driver;
++
++void board_console_init(void)
++{
++    const int port = CONFIG_ESP_CONSOLE_UART_NUM;
++    s_driver = uart_driver_install(port, CONSOLE_RX_RING, CONSOLE_TX_RING, 0, NULL, 0) == ESP_OK;
++    if (s_driver) uart_vfs_dev_use_driver(port);
++    else uart_vfs_dev_use_nonblocking(port);
++    printf("BOARD %s console=uart%d tx=%d rx=%d driver=%u\n", BOARD_NAME, port,
++           CONFIG_ESP_CONSOLE_UART_TX_GPIO, CONFIG_ESP_CONSOLE_UART_RX_GPIO, s_driver);
++}
++
++bool board_console_read(uint8_t *c)
++{
++    if (!s_driver) return false;
++    return uart_read_bytes(CONFIG_ESP_CONSOLE_UART_NUM, c, 1, 0) == 1;
++}
++#endif
+diff --git a/main/board.h b/main/board.h
+new file mode 100644
+index 0000000..770f1b8
+--- /dev/null
++++ b/main/board.h
+@@ -0,0 +1,44 @@
++/* C5VRX-5 board profiles: pin maps and console transport.
++ *
++ * XIAO ESP32-C5 (upstream): six-bit resistor DAC on D4..D9, optional 40 MHz
++ * clock on D10, USB-Serial-JTAG console.
++ *
++ * OSPTEK ESP32-P4C5 module: the ESP32-C5 talks to the on-module ESP32-P4
++ * over seven fixed traces (SDIO + one IO). They carry the six-bit composite
++ * bus and its 40 MHz clock; the ESP32-P4 decodes the video.
++ *
++ *   C5 GPIO9  -> P4 GPIO18   clock (shift on falling edge)
++ *   C5 GPIO8  -> P4 GPIO14   bit 0
++ *   C5 GPIO7  -> P4 GPIO15   bit 1
++ *   C5 GPIO14 -> P4 GPIO16   bit 2  (C5 USB D+, USB-Serial-JTAG unused)
++ *   C5 GPIO13 -> P4 GPIO17   bit 3  (C5 USB D-)
++ *   C5 GPIO10 -> P4 GPIO19   bit 4
++ *   C5 GPIO2  -> P4 GPIO6    bit 5
++ *
++ * GPIO2 is a video line there, so the IQ loopback lane it carried on the
++ * XIAO moves to GPIO6 (a module pad that must stay unconnected). */
++#pragma once
++#include "sdkconfig.h"
++
++#if CONFIG_C5VRX_BOARD_OSPTEK_P4C5
++#define BOARD_NAME              "osptek-p4c5"
++#define BOARD_IQ_GPIO_NUMS      {1, 0, 25, 6, 27, 5, 3, 4}
++#define BOARD_TX_DATA_GPIO_NUMS {8, 7, 14, 13, 10, 2, -1, -1}
++#define BOARD_TX_CLK_GPIO       9
++#define BOARD_DIGITAL_BUS       1
++#define BOARD_USB_CONSOLE       0
++#else
++#define BOARD_NAME              "xiao-c5"
++#define BOARD_IQ_GPIO_NUMS      {1, 0, 25, 2, 27, 5, 3, 4}
++#define BOARD_TX_DATA_GPIO_NUMS {23, 24, 11, 12, 8, 9, -1, -1}
++#define BOARD_TX_CLK_GPIO       (-1)
++#define BOARD_DIGITAL_BUS       0
++#define BOARD_USB_CONSOLE       1
++#endif
++
++#include <stdbool.h>
++#include <stdint.h>
++/* Console byte transport: USB-Serial-JTAG FIFO or the console UART. */
++void board_console_init(void);
++/* One received byte, never blocks; false when none is waiting. */
++bool board_console_read(uint8_t *c);
+diff --git a/main/console.c b/main/console.c
+index 70a6307..5dcc07d 100644
+--- a/main/console.c
++++ b/main/console.c
+@@ -8,7 +8,7 @@
+ #include "esp_heap_caps.h"
+ #include "esp_timer.h"
+ #include "freertos/queue.h"
+-#include "hal/usb_serial_jtag_ll.h"
++#include "board.h"
+ #include "rf.h"
+ #include "snapshot.h"
+ 
+@@ -124,7 +124,7 @@ static void usb_reader_task(void *arg)
+     for (;;) {
+         for (unsigned k = 0; k < 64; ++k) {
+             uint8_t c;
+-            if (usb_serial_jtag_ll_read_rxfifo(&c, 1) == 0) break;
++            if (!board_console_read(&c)) break;
+             if (c == '`') rf_reboot_to_download();   /* never returns */
+             (void)xQueueSend(s_keys, &c, 0);
+         }
+diff --git a/main/flightlog.c b/main/flightlog.c
+index 9f89414..007ea7d 100644
+--- a/main/flightlog.c
++++ b/main/flightlog.c
+@@ -16,8 +16,11 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include "board.h"
++#if BOARD_USB_CONSOLE
+ #include "driver/usb_serial_jtag.h"
+ #include "driver/usb_serial_jtag_vfs.h"
++#endif
+ #include "esp_chip_info.h"
+ #include "esp_heap_caps.h"
+ #include "esp_attr.h"
+@@ -475,20 +478,27 @@ static bool s_dump_usb, s_dump_failed;
+ 
+ static void dump_usb_open(void)
+ {
++#if !BOARD_USB_CONSOLE
++    s_dump_failed = false;
++    s_dump_usb = false;   /* UART console: the byte path below */
++#else
+     usb_serial_jtag_driver_config_t cfg = { .tx_buffer_size = FLOG_DUMP_TX_BYTES, .rx_buffer_size = 256 };
+     s_dump_failed = false;
+     s_dump_usb = !usb_serial_jtag_is_driver_installed() &&
+                  heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) >= FLOG_DUMP_TX_BYTES + 1024u &&
+                  usb_serial_jtag_driver_install(&cfg) == ESP_OK;
+     if (s_dump_usb) usb_serial_jtag_vfs_use_driver();   /* other tasks' prints go through the ring too */
++#endif
+ }
+ 
+ static void dump_usb_close(void)
+ {
+     if (!s_dump_usb) return;
++#if BOARD_USB_CONSOLE
+     (void)usb_serial_jtag_wait_tx_done(pdMS_TO_TICKS(FLOG_DUMP_WAIT_MS));
+     usb_serial_jtag_vfs_use_nonblocking();
+     (void)usb_serial_jtag_driver_uninstall();
++#endif
+     s_dump_usb = false;
+ }
+ 
+@@ -503,6 +513,7 @@ static void dump_line(const char *fmt, ...)
+     va_end(ap);
+     if (n <= 0 || (size_t)n >= sizeof(line) - 1u) return;
+     if (!s_dump_usb) { fputs(line, stdout); vTaskDelay(1); return; }
++#if BOARD_USB_CONSOLE
+     /* The console's own path writes CR LF; the driver sends bytes as given. */
+     if (line[n - 1] == '\n') { line[n - 1] = '\r'; line[n++] = '\n'; }
+     if (usb_serial_jtag_write_bytes(line, (size_t)n, pdMS_TO_TICKS(FLOG_DUMP_WAIT_MS)) != n) s_dump_failed = true;
+@@ -510,6 +521,7 @@ static void dump_line(const char *fmt, ...)
+     uint8_t c;
+     while (usb_serial_jtag_read_bytes(&c, 1, 0) == 1)
+         if (c == '`') { dump_usb_close(); rf_reboot_to_download(); }
++#endif
+ }
+ 
+ static void dump_range(size_t offset, size_t len)
+diff --git a/main/main.c b/main/main.c
+index 5b5f2ec..58926a7 100644
+--- a/main/main.c
++++ b/main/main.c
+@@ -4,7 +4,7 @@
+ #include <fcntl.h>
+ #include <stdio.h>
+ #include <unistd.h>
+-#include "driver/usb_serial_jtag_vfs.h"
++#include "board.h"
+ #include "esp_app_desc.h"
+ #include "esp_timer.h"
+ #include "rf.h"
+@@ -45,7 +45,7 @@ void app_main(void)
+     setvbuf(stdin, NULL, _IONBF, 0);
+     setvbuf(stdout, NULL, _IONBF, 0);
+     fcntl(fileno(stdout), F_SETFL, fcntl(fileno(stdout), F_GETFL, 0) | O_NONBLOCK);
+-    usb_serial_jtag_vfs_use_nonblocking();
++    board_console_init();
+     /* The console first: flashing (download key) and diagnostics must stay
+      * reachable whatever a later boot step does. */
+     console_start();
+diff --git a/main/rf.h b/main/rf.h
+index c0b31e4..d6df69e 100644
+--- a/main/rf.h
++++ b/main/rf.h
+@@ -8,6 +8,7 @@
+ #include <stdint.h>
+ #include "esp_err.h"
+ #include "arc_phy.h"
++#include "board.h"
+ 
+ /* Shared MODEM_DIAG output / PARLIO RX input order: Q low..high, I low..high.
+  * I's low bit uses the XIAO user-LED GPIO27 instead of D10/GPIO10, freeing
+@@ -16,8 +17,9 @@
+  * IQ-owned and cannot export the optional sample clock (PR #257).
+  * GPIO27 is exclusively IQ-owned: do not drive it as a status LED. The LED/resistor remains connected; 40 MS/s capture and
+  * sampling-phase margin on an unmodified XIAO still need board validation.
+- * These are GPIO-matrix loopbacks; no external IQ wiring is required. */
+-#define RF_IQ_GPIO_NUMS {1, 0, 25, 2, 27, 5, 3, 4}
++ * These are GPIO-matrix loopbacks; no external IQ wiring is required.
++ * The OSPTEK P4C5 profile moves the GPIO2 lane to GPIO6 (board.h). */
++#define RF_IQ_GPIO_NUMS BOARD_IQ_GPIO_NUMS
+ 
+ esp_err_t rf_start(void);
+ /* Stop the dump writer and Wi-Fi, request a USB download boot and restart,
+diff --git a/main/transport.c b/main/transport.c
+index 630ba3d..fe52ead 100644
+--- a/main/transport.c
++++ b/main/transport.c
+@@ -56,7 +56,12 @@ static const void *tracker_program(void) { return demod_program(s_demod); }
+ /* Six-bit DAC only. Baseline wiring stays D4..D9. Clock Pin D10
+  * relocates bit 2 (2k resistor) from D6/GPIO11 to D3/GPIO7 at boot.
+  * D10/GPIO10 then carries PARLIO TX's clock, never an extra DAC bit. */
+-static const int s_dac_gpio[8] = {23, 24, 11, 12, 8, 9, -1, -1};
++static const int s_dac_gpio[8] = BOARD_TX_DATA_GPIO_NUMS;
++
++/* The sample clock pad: the board's digital bus always exports it; the
++ * XIAO only with Clock Pin D10 (bit 2 then moves to D3/GPIO7). */
++static int tx_clk_gpio(void) { return BOARD_DIGITAL_BUS ? BOARD_TX_CLK_GPIO : experimental_clock_d10() ? 10 : -1; }
++static int tx_bit2_gpio(void) { return !BOARD_DIGITAL_BUS && experimental_clock_d10() ? 7 : s_dac_gpio[2]; }
+ 
+ DMA_ATTR __attribute__((aligned(64))) uint8_t s_raw_ring[RAW_RING_BYTES];
+ static parlio_rx_unit_handle_t s_rx;
+@@ -157,10 +162,8 @@ static esp_err_t prepare_tx(void)
+         .bit_pack_order = PARLIO_BIT_PACK_ORDER_LSB,
+     };
+     for (unsigned k = 0; k < 8u; ++k) cfg.data_gpio_nums[k] = s_dac_gpio[k];
+-    if (experimental_clock_d10()) {
+-        cfg.clk_out_gpio_num = 10;
+-        cfg.data_gpio_nums[2] = 7;
+-    }
++    cfg.clk_out_gpio_num = tx_clk_gpio();
++    cfg.data_gpio_nums[2] = tx_bit2_gpio();
+     /* The driver owns these pads through menu and halted restarts. Data
+      * shifts on falling edges; capture on rising edges (verify on hardware).
+      * Clock can stop with TX: external capture must tolerate interruptions. */
+@@ -169,9 +172,9 @@ static esp_err_t prepare_tx(void)
+     const bitscrambler_config_t bs = {.dir = BITSCRAMBLER_DIR_TX, .attach_to = SOC_BITSCRAMBLER_ATTACH_PARL_IO};
+     err = bitscrambler_new(&bs, &s_bs);
+     if (err != ESP_OK) return err;
+-    printf("SAMPLE_CLOCK enabled=%u gpio=%d hz=%u dac_bit2_gpio=%d\n",
+-           experimental_clock_d10(), cfg.clk_out_gpio_num,
+-           experimental_clock_d10() ? 40000000u : 0u, cfg.data_gpio_nums[2]);
++    printf("SAMPLE_CLOCK enabled=%u gpio=%d hz=%u dac_bit2_gpio=%d board=%s\n",
++           cfg.clk_out_gpio_num >= 0, cfg.clk_out_gpio_num,
++           cfg.clk_out_gpio_num >= 0 ? 40000000u : 0u, cfg.data_gpio_nums[2], BOARD_NAME);
+     return enable_tx();
+ }
+ 
+@@ -682,10 +685,10 @@ void transport_flog_output(transport_flog_output_t *out)
+ 
+ void transport_print(void)
+ {
+-    printf("SAMPLE_CLOCK enabled=%u requested=%u gpio=%d hz=%u dac_bit2_gpio=%d reboot=%u\n",
+-           experimental_clock_d10(), experimental_get(EXP_CLOCK_D10),
+-           experimental_clock_d10() ? 10 : -1, experimental_clock_d10() ? 40000000u : 0u,
+-           experimental_clock_d10() ? 7 : 11, experimental_reboot_needed());
++    printf("SAMPLE_CLOCK enabled=%u requested=%u gpio=%d hz=%u dac_bit2_gpio=%d reboot=%u board=%s\n",
++           tx_clk_gpio() >= 0, BOARD_DIGITAL_BUS || experimental_get(EXP_CLOCK_D10),
++           tx_clk_gpio(), tx_clk_gpio() >= 0 ? 40000000u : 0u,
++           tx_bit2_gpio(), experimental_reboot_needed(), BOARD_NAME);
+     const char *verified_demod = s_have_verified && s_lut_known && !s_transport_fault ?
+         transport_demod_name(s_verified_demod) : "unknown";
+     printf("DEMOD selected=%s verified=%s p64_model=%s p64_table_sha256=%s u85q_table_sha256=%s (console m switches)\n",
+diff --git a/partitions_4mb.csv b/partitions_4mb.csv
+new file mode 100644
+index 0000000..1fe2dc2
+--- /dev/null
++++ b/partitions_4mb.csv
+@@ -0,0 +1,7 @@
++# C5VRX-5 on 4 MB flash (OSPTEK ESP32-P4C5 module, ESP32-C5HF4).
++# The flight log keeps its fixed 1.5 MiB format; the app slot shrinks to 2 MiB.
++# Name,   Type, SubType, Offset,   Size,     Flags
++nvs,      data, nvs,     0x9000,   0x6000,
++phy_init, data, phy,     0xf000,   0x1000,
++factory,  app,  factory, 0x10000,  0x200000,
++flightlog,data, 0x99,    0x210000, 0x180000,
+diff --git a/sdkconfig.p4c5.defaults b/sdkconfig.p4c5.defaults
+new file mode 100644
+index 0000000..071a716
+--- /dev/null
++++ b/sdkconfig.p4c5.defaults
+@@ -0,0 +1,14 @@
++# OSPTEK ESP32-P4C5 module (ESP32-C5HF4, 4 MB flash, no PSRAM). Build with:
++#   idf.py -B build-p4c5 -DSDKCONFIG=sdkconfig.p4c5 "-DSDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.p4c5.defaults" build
++CONFIG_C5VRX_BOARD_OSPTEK_P4C5=y
++CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
++CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_4mb.csv"
++# Console on UART1 to the ESP32-P4 (C5 GPIO23 TX -> P4 GPIO22, P4 GPIO23 -> C5 GPIO24).
++# GPIO13/14 (USB D-/D+) carry video bits 3/2, so USB-Serial-JTAG stays off.
++CONFIG_ESP_CONSOLE_UART_CUSTOM=y
++CONFIG_ESP_CONSOLE_UART_CUSTOM_NUM_1=y
++CONFIG_ESP_CONSOLE_UART_TX_GPIO=23
++CONFIG_ESP_CONSOLE_UART_RX_GPIO=24
++CONFIG_ESP_CONSOLE_UART_BAUDRATE=2000000
++CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
++CONFIG_USJ_ENABLE_USB_SERIAL_JTAG=n

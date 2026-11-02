@@ -1,0 +1,29 @@
+menu "FPVBox USB composite device"
+
+config FPV_USB_VID
+    hex "USB vendor ID"
+    default 0x1209
+    help
+        0x1209/0x0001 is the pid.codes test ID for private use. Get your own
+        VID/PID before distributing devices.
+
+config FPV_USB_PID
+    hex "USB product ID"
+    default 0x0001
+
+config FPV_UVC_PAYLOAD_BYTES
+    int "UVC payload (bulk transfer) size"
+    range 512 32768
+    default 16384
+
+config FPV_USB_DWC2_DMA
+    int "Use the DWC2 DMA mode (1) or slave mode (0)"
+    range 0 1
+    default 0
+
+config FPV_USB_TASK_CORE
+    int "TinyUSB task core"
+    range 0 1
+    default 0
+
+endmenu

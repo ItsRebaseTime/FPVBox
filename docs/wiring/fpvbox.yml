@@ -1,0 +1,83 @@
+# FPVBox jumper wiring (WireViz). Render:
+#   wireviz docs/wiring/fpvbox.yml        -> fpvbox.svg / .png / .html / .bom.tsv
+# Shield pins are the LilyGo T-ETH-Elite 2x20 header numbers; carrier pins are
+# the silkscreen GPIO names on the OSPTEK P4C5 carrier headers J2/J4 (the
+# carrier's pin numbers only order the rows).
+
+metadata:
+  title: FPVBox - LoRa shield and C5 console wiring
+
+options:
+  fontname: arial
+  bgcolor: WH
+  color_mode: SHORT
+
+connectors:
+  Shield:
+    type: LilyGo T-ETH-Elite LoRa shield
+    subtype: 2x20 header (SX1280 17AP + L76K)
+    pins:      [2,    6,   9,   13,        19,         23,         21,         27,         29,          28,        18,          40,       16,     15,     32,      3,   5,   31]
+    pinlabels: [+5V, GND, GND, RADIO_CS, RADIO_MOSI, RADIO_SCLK, RADIO_MISO, RADIO_DIO1, RADIO_BUSY, RADIO_RST, RADIO_EN/TX, RADIO_RX, GPS_TX, GPS_RX, GPS_PPS, SDA, SCL, ADC_BTN]
+    notes: |
+      Pins 1 and 17 (+3V3) stay unconnected.
+      SW6 ON (GPS UART), JP1 bridged (PPS),
+      JP4 bridged only for the buttons.
+
+  Carrier:
+    type: OSPTEK ESP32-P4C5 carrier V1.3
+    subtype: J2 / J4 headers (silkscreen)
+    pins:      [1,      2,   3,   4,      5,      6,      7,      8,      9,      10,     11,     12,     13,     14,     15,     16,    17,    18]
+    pinlabels: [VIN_5V, GND, GND, GPIO28, GPIO29, GPIO30, GPIO31, GPIO32, GPIO33, GPIO27, GPIO46, GPIO47, GPIO48, GPIO49, GPIO50, GPIO7, GPIO8, GPIO51]
+    notes: |
+      GPIO28-31: SPI2 IO-MUX. UART2: GPIO48 RX, GPIO49 TX.
+      GPIO7/8: carrier I2C bus (10k pull-ups).
+
+  J4_C5:
+    type: Carrier J4, ESP32-C5 pads
+    pins: [1, 2]
+    pinlabels: [C6_IO7 (C5 GPIO23), C6_IO8 (C5 GPIO24)]
+    notes: |
+      Leave C6_IO4/5/6/9/14 unconnected
+      (C5VRX IQ loopback pads).
+
+  J4_P4:
+    type: Carrier J4, ESP32-P4 pads
+    pins: [1, 2]
+    pinlabels: [GPIO22 (UART1 RX), GPIO23 (UART1 TX)]
+    notes: Leave GPIO6 and GPIO54 unconnected.
+
+cables:
+  W1:
+    category: bundle
+    type: Radio + power
+    colors: [RD, BK, BK, OG, YE, GN, BU, VT, GY, WH, PK, TQ]
+    wirelabels: [+5V, GND, GND, NSS, MOSI, SCK, MISO, DIO1, BUSY, RST, TXEN, RXEN]
+  W2:
+    category: bundle
+    type: GNSS
+    colors: [BN, OG, YE]
+    wirelabels: [GPS_TX, GPS_RX, PPS]
+  W3:
+    category: bundle
+    type: Optional (OLED / BME280 / buttons)
+    colors: [BU, GN, GY]
+    wirelabels: [SDA, SCL, ADC_BTN]
+  W4:
+    category: bundle
+    type: C5VRX console, 2 Mbaud
+    colors: [YE, GN]
+    wirelabels: [C5 TX, C5 RX]
+
+connections:
+  - - Shield: [2, 6, 9, 13, 19, 23, 21, 27, 29, 28, 18, 40]
+    - W1: [1-12]
+    - Carrier: [1-12]
+  - - Shield: [16, 15, 32]
+    - W2: [1-3]
+    - Carrier: [13-15]
+  - - Shield: [3, 5, 31]
+    - W3: [1-3]
+    - Carrier: [16-18]
+  - - J4_C5: [1, 2]
+    - W4: [1, 2]
+    - J4_P4: [1, 2]

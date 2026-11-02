@@ -1,0 +1,17 @@
+menu "FPVBox video capture"
+
+config FPV_CAPTURE_HW_DECIMATE
+    bool "Divide the 40 MHz bus clock by two in the PARLIO RX unit"
+    default y
+    help
+        C5VRX sends every sample twice on a 40 MHz clock. With this option the
+        RX unit samples every second clock edge (20 MB/s into memory). If the
+        divided external clock misbehaves on hardware, disable it: the unit
+        then captures 40 MB/s and the decoder keeps every second byte.
+
+config FPV_CAPTURE_RING_NODES
+    int "Capture ring size in 4032-byte DMA nodes"
+    range 4 64
+    default 16
+
+endmenu

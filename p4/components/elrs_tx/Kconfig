@@ -1,0 +1,19 @@
+menu "FPVBox ELRS TX"
+
+config FPV_ELRS_EU_LBT
+    bool "EU CE 2.4 GHz regulatory mode (listen before talk, 10 mW)"
+    default n
+
+config FPV_ELRS_MAX_POWER_IDX
+    int "Highest ELRS power level (0=10 25 50 100 250 500 1000 2000 mW)"
+    range 0 4
+    default 3
+    help
+        The LilyGo SX1280 PA module's gain is not published. Keep the default
+        (100 mW) until the output was measured; see docs/WIRING.md.
+
+config FPV_ELRS_BIND_PHRASE
+    string "Binding phrase (empty: bind with the receiver's bind mode)"
+    default ""
+
+endmenu
